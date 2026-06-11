@@ -1,7 +1,7 @@
 import math
 import torch 
 from dataclasses import dataclass
-from typing import cast
+from typing import cast, Tuple
 from torch import Tensor
 import torch.nn as nn
 from torch.nn import functional as F
@@ -94,7 +94,7 @@ class GPT(nn.Module):
         ))
         self.lm_head = nn.Linear(config.n_embed, config.vocab_size, bias=False)
 
-    def forward(self, idx: Tensor) -> None:
+    def forward(self, idx: Tensor, targets: None) -> Tuple[Tensor, Tensor]:
         B, T = idx.size()
         assert T <= self.config.block_size, f"Cannot forward sequence of size: {T}, block size is only: {self.config.block_size}"
         
@@ -112,8 +112,11 @@ class GPT(nn.Module):
         ln_f = cast(nn.LayerNorm, self.transformer.ln_f)
         x = ln_f(x)
         logits = self.lm_head(x)
+        loss = None
+        if targets is not None:
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1), targets.view(-1)))
 
-        return logits
+        return logits, loss
 
     
     @classmethod
@@ -172,9 +175,25 @@ model = GPT.from_pretrained("gpt2")
 model.eval()
 model.to('cuda')
 
-# prefix context
 import tiktoken
 enc = tiktoken.get_encoding('gpt2')
+with open('input.txt', 'r') as f:
+    text = f.read()
+text = text[:1000]
+tokens = enc.encode(text)
+B, T = 4, 32
+buf = torch.tensor(tokens[:B * T + 1])
+x = buf[:-1].view(B, T)
+y = buf[1:].view(B, T)
+
+model = GPT(GPTConfig())
+model.to('cuda')
+logits, loss = model(x, y)
+print(loss.shape)
+import sys; sys.exit(0)
+
+
+# prefix context
 tokens = enc.encode("hello! Im a language model")
 tokens = torch.tensor(tokens, dtype=torch.long)
 tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)
