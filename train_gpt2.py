@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 import torch 
+from typing import cast
+import math
 from torch import Tensor
 import torch.nn as nn
 from torch.nn import functional as F
@@ -24,7 +26,27 @@ class CasualSelfAttention(nn.Module):
         self.n_embed = config.n_embed
         self.n_head = config.n_head
 
-        # self.register_buffer("bias", )
+        # bias here is the attention mask(ik, shitty naming)
+        self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
+                             .view(1, 1, config.block_size, config.block_size))
+        
+    def forward(self, x: Tensor) -> Tensor:
+        B, T, C = x.size()
+        qkv = self.c_attn(x)
+        q, k, v = qkv.split(self.n_embed, dim=2)
+        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+
+        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+        mask = cast(Tensor, self.bias)
+        att = att.masked_fill(mask[:, :, :T, :T] == 0, float('-inf'))
+        att = F.softmax(att, dim=-1)
+        y = att @ v # (B, nh, T, T) @ (B, nh, T, hs) ==> (B, nh, T, hs)
+        y = y.transpose(1, 2).contiguous().view(B, T, C)
+        y = self.c_proj(y)
+        
+        return y
 
 
 
