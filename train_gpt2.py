@@ -1,7 +1,7 @@
-from dataclasses import dataclass
-import torch 
-from typing import cast, Self
 import math
+import torch 
+from dataclasses import dataclass
+from typing import cast
 from torch import Tensor
 import torch.nn as nn
 from torch.nn import functional as F
@@ -10,7 +10,7 @@ from torch.nn import functional as F
 @dataclass
 class GPTConfig:
     block_size: int = 1024 # max sequence length
-    vocab_size: int = 50257 # no. of tokens
+    vocab_size: int = 50257
     n_layer: int = 12
     n_head: int = 12
     n_embed: int = 768
@@ -38,7 +38,7 @@ class CasualSelfAttention(nn.Module):
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
 
-        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1))) # (B, nh, T, hs) @ (B, nh, hs, T) ==> (B, nh, T, T)
         mask = cast(Tensor, self.bias)
         att = att.masked_fill(mask[:, :, :T, :T] == 0, float('-inf'))
         att = F.softmax(att, dim=-1)
@@ -110,7 +110,7 @@ class GPT(nn.Module):
             "gpt2-xl": dict(n_layer=48, n_head=25, n_embed=1600)
         }[model_type]
 
-        config_args['vocab_size'] = 50527
+        config_args['vocab_size'] = 50257
         config_args['block_size'] = 1024
 
         config = GPTConfig(**config_args)
@@ -134,9 +134,16 @@ class GPT(nn.Module):
                 with torch.no_grad():
                     sd[k].copy_(sd_hf[k].t())
             else:
-                assert sd_hf[k].shape == sd[k].shape
+                if sd_hf[k].shape != sd[k].shape:
+                    print(k)
+                    print("hf :", sd_hf[k].shape)
+                    print("mine:", sd[k].shape)
+                    raise ValueError("shape mismatch")
                 with torch.no_grad():
                     sd[k].copy_(sd_hf[k])
 
         return model
-
+    
+    
+model = GPT.from_pretrained("gpt2")
+print("working!!!")
