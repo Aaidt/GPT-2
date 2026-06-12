@@ -94,13 +94,13 @@ class GPT(nn.Module):
         ))
         self.lm_head = nn.Linear(config.n_embed, config.vocab_size, bias=False)
 
-    def forward(self, idx: Tensor, targets: None) -> Tuple[Tensor, Tensor]:
+    def forward(self, idx: Tensor, targets: Tensor | None = None) -> Tuple[Tensor, Tensor | None]:
         B, T = idx.size()
         assert T <= self.config.block_size, f"Cannot forward sequence of size: {T}, block size is only: {self.config.block_size}"
         
         pos = torch.arange(0, T, dtype=torch.long, device=idx.device)
         wte = cast(nn.Embedding, self.transformer.wte)
-        wpe = cast(nn.Embedding, self.transformer.wte)
+        wpe = cast(nn.Embedding, self.transformer.wpe)
         tok_emb = wte(idx)
         pos_emb = wpe(pos)
         
@@ -111,10 +111,10 @@ class GPT(nn.Module):
             x = block(x)
         ln_f = cast(nn.LayerNorm, self.transformer.ln_f)
         x = ln_f(x)
-        logits = self.lm_head(x)
+        logits: Tensor = self.lm_head(x)
         loss = None
         if targets is not None:
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1), targets.view(-1)))
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
 
         return logits, loss
 
@@ -182,7 +182,7 @@ with open('input.txt', 'r') as f:
 text = text[:1000]
 tokens = enc.encode(text)
 B, T = 4, 32
-buf = torch.tensor(tokens[:B * T + 1])
+buf = torch.tensor(tokens[:B * T + 1], device='cuda')
 x = buf[:-1].view(B, T)
 y = buf[1:].view(B, T)
 
@@ -195,7 +195,7 @@ import sys; sys.exit(0)
 
 # prefix context
 tokens = enc.encode("hello! Im a language model")
-tokens = torch.tensor(tokens, dtype=torch.long)
+tokens = torch.tensor(tokens, dtype=torch.long, device='cuda')
 tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)
 x = tokens.to('cuda')
 
