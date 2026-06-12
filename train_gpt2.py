@@ -94,6 +94,10 @@ class GPT(nn.Module):
         ))
         self.lm_head = nn.Linear(config.n_embed, config.vocab_size, bias=False)
 
+        # weight tying
+        wte = cast(nn.Embedding, self.transformer.wte)
+        wte.weight = self.lm_head.weight
+
     def forward(self, idx: Tensor, targets: Tensor | None = None) -> Tuple[Tensor, Tensor | None]:
         B, T = idx.size()
         assert T <= self.config.block_size, f"Cannot forward sequence of size: {T}, block size is only: {self.config.block_size}"
@@ -177,21 +181,53 @@ model.to('cuda')
 
 import tiktoken
 enc = tiktoken.get_encoding('gpt2')
-with open('input.txt', 'r') as f:
-    text = f.read()
-text = text[:1000]
-tokens = enc.encode(text)
-B, T = 4, 32
-buf = torch.tensor(tokens[:B * T + 1], device='cuda')
-x = buf[:-1].view(B, T)
-y = buf[1:].view(B, T)
+
+
+class DataLoaderLite:
+
+    def __init__(self, B: int, T: int) -> None:
+        self.B = B
+        self.T = T
+
+        with open('input.txt', 'r') as f:
+            text = f.read()
+        tokens = enc.encode(text)
+        self.tokens = torch.tensor(tokens)
+        print(f"Loaded {len(self.tokens)} tokens!!")
+        print(f"1 epoch = {len(self.tokens) // (B * T)} batches")
+
+        self.current_pos = 0
+
+    def next_batch(self) -> Tuple[Tensor, Tensor]:   
+        B, T = self.B, self.T
+        buf = self.tokens[self.current_pos : self.current_pos + B * T + 1]
+        x = (buf[:-1]).view(B, T)
+        y = (buf[1:]).view(B, T)
+
+        self.current_pos += B * T
+
+        if self.current_pos + (B * T + 1) > len(self.tokens):
+            self.current_pos = 0 
+
+        return x, y
+
+train_loader = DataLoaderLite(4, 32)
 
 model = GPT(GPTConfig())
 model.to('cuda')
-logits, loss = model(x, y)
-print(loss.shape)
-import sys; sys.exit(0)
+# logits, loss = model(x, y)
 
+optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
+for i in range(50):
+    x ,y = train_loader.next_batch()
+    x, y = x.to(device='cuda'), y.to(device='cuda')
+    optimizer.zero_grad()
+    logits, loss = model(x, y)
+    loss.backward()
+    optimizer.step()
+    print(f"Step: {i}, Loss: {loss.item()}")
+
+import sys; sys.exit(0)
 
 # prefix context
 tokens = enc.encode("hello! Im a language model")
@@ -203,7 +239,7 @@ torch.manual_seed(42)
 torch.cuda.manual_seed(42)
 while x.size(1) < max_length:
     with torch.no_grad():
-        logits = model(x) # (B, T, vocab)
+        logits, _ = model(x) # (B, T, vocab)
         logits = logits[:, -1, :] # (B, vocab)
         probs = F.softmax(logits, dim=-1)
 
