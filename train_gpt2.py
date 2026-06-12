@@ -23,6 +23,7 @@ class CasualSelfAttention(nn.Module):
         assert config.n_embed % config.n_head == 0
         self.c_attn = nn.Linear(config.n_embed, 3 * config.n_embed)
         self.c_proj = nn.Linear(config.n_embed, config.n_embed)
+        self.c_proj.NANOGPT_SCALE_INIT = 1 # type: ignore[attr-defined]
         self.n_embed = config.n_embed
         self.n_head = config.n_head
 
@@ -57,6 +58,7 @@ class MLP(nn.Module):
         self.c_fc = nn.Linear(config.n_embed, config.n_embed * 4)
         self.gelu = nn.GELU(approximate="tanh")
         self.c_proj = nn.Linear(4 * config.n_embed, config.n_embed)
+        self.c_proj.NANOGPT_SCALE_INIT = 1 # type: ignore[attr-defined]
 
     def forward(self, x: Tensor) -> Tensor:
         x = self.c_fc(x)
@@ -97,6 +99,20 @@ class GPT(nn.Module):
         # weight tying
         wte = cast(nn.Embedding, self.transformer.wte)
         wte.weight = self.lm_head.weight
+
+        self.apply(self._init_weights)
+
+    def _init_weights(self, module: nn.Module) -> None:
+        std = 0.02
+        if hasattr(module, 'NANOGPT_SCALE_INIT'):
+            std *= (2 + self.config.n_layer) ** -0.5
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=std)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=std)
+
 
     def forward(self, idx: Tensor, targets: Tensor | None = None) -> Tuple[Tensor, Tensor | None]:
         B, T = idx.size()
@@ -211,6 +227,10 @@ class DataLoaderLite:
 
         return x, y
 
+torch.manual_seed(1337)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed(1337)
+    
 train_loader = DataLoaderLite(4, 32)
 
 model = GPT(GPTConfig())
@@ -229,26 +249,26 @@ for i in range(50):
 
 import sys; sys.exit(0)
 
-# prefix context
-tokens = enc.encode("hello! Im a language model")
-tokens = torch.tensor(tokens, dtype=torch.long, device='cuda')
-tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)
-x = tokens.to('cuda')
+# # prefix context
+# tokens = enc.encode("hello! Im a language model")
+# tokens = torch.tensor(tokens, dtype=torch.long, device='cuda')
+# tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)
+# x = tokens.to('cuda')
 
-torch.manual_seed(42)
-torch.cuda.manual_seed(42)
-while x.size(1) < max_length:
-    with torch.no_grad():
-        logits, _ = model(x) # (B, T, vocab)
-        logits = logits[:, -1, :] # (B, vocab)
-        probs = F.softmax(logits, dim=-1)
+# torch.manual_seed(42)
+# torch.cuda.manual_seed(42)
+# while x.size(1) < max_length:
+#     with torch.no_grad():
+#         logits, _ = model(x) # (B, T, vocab)
+#         logits = logits[:, -1, :] # (B, vocab)
+#         probs = F.softmax(logits, dim=-1)
 
-        topk_probs, topk_indices = torch.topk(probs, 50, dim=-1)
-        ix = torch.multinomial(topk_probs, 1)
-        xcol = torch.gather(topk_indices, -1, ix)
-        x = torch.cat((x, xcol), dim=1)
+#         topk_probs, topk_indices = torch.topk(probs, 50, dim=-1)
+#         ix = torch.multinomial(topk_probs, 1)
+#         xcol = torch.gather(topk_indices, -1, ix)
+#         x = torch.cat((x, xcol), dim=1)
 
-for i in range(num_return_sequences):
-    tokens = x[i, :max_length].tolist()
-    decoded = enc.decode(tokens)
-    print(f"=> {decoded}")
+# for i in range(num_return_sequences):
+#     tokens = x[i, :max_length].tolist()
+#     decoded = enc.decode(tokens)
+#     print(f"=> {decoded}")
